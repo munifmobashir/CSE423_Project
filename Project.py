@@ -5,6 +5,7 @@ from OpenGL.GLUT import *
 import time
 import random
 
+
 # -----------------------
 # Global constants/state
 # -----------------------
@@ -23,14 +24,19 @@ LANE_MARKING_LENGTH = 50
 LANE_MARKING_GAP = 40
 
 # Player
-player_lane = 1     # 0,1,2
+player_lane = 1  # 0,1,2
 player_z = 0.0
 BASE_SPEED = 1.2
 BOOST_SPEED = 3.0
 player_speed = BASE_SPEED
 
+# Score / state
+score = 0
+game_over = False
+
 # Obstacles / traffic
-obstacles = []      # each: {"lane": int, "z": float, "kind": str}
+# kind: "car", "cube", "barrier"
+obstacles = []  # each: {"lane": int, "z": float, "kind": str}
 spawn_timer = 0.0
 spawn_interval = 1.2
 start_time = time.time()
@@ -43,11 +49,13 @@ _last_time = time.time()
 # Utility
 # -----------------------
 def lane_x(idx):
+    """Mirror lanes so lower index is visually left when camera is behind car."""
     center = 0.0
-    return center + (idx - 1) * LANE_OFFSET
+    return center - (idx - 1) * LANE_OFFSET
 
 
 def draw_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18):
+    # Set up 2D orthographic projection for text
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
@@ -68,13 +76,24 @@ def draw_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18):
     glMatrixMode(GL_MODELVIEW)
 
 
+# AABB collision in X/Z plane [web:111][web:230]
+def has_collided(x1, z1, w1, h1, x2, z2, w2, h2):
+    # centers (x,z) and half-sizes (w,h)
+    return (
+        x1 - w1 < x2 + w2 and
+        x1 + w1 > x2 - w2 and
+        z1 - h1 < z2 + h2 and
+        z1 + h1 > z2 - h2
+    )
+
+
 # -----------------------
 # Car / obstacle models
 # -----------------------
 def draw_player_car():
     glPushMatrix()
 
-    # main body (low and wide)
+    # main body
     glColor3f(1.0, 0.8, 0.0)
     glPushMatrix()
     glScalef(2.1, 0.35, 4.2)
@@ -89,7 +108,7 @@ def draw_player_car():
     glutSolidCube(20)
     glPopMatrix()
 
-    # cabin / roof
+    # roof block
     glPushMatrix()
     glColor3f(0.95, 0.75, 0.0)
     glTranslatef(0, 9, -5)
@@ -97,17 +116,15 @@ def draw_player_car():
     glutSolidCube(20)
     glPopMatrix()
 
-    # glass (front and rear)
+    # glass
     glPushMatrix()
     glDisable(GL_LIGHTING)
     glColor4f(0.08, 0.08, 0.1, 0.85)
     glBegin(GL_QUADS)
-    # front windshield
     glVertex3f(-16, 8, 10)
     glVertex3f(16, 8, 10)
     glVertex3f(10, 16, -2)
     glVertex3f(-10, 16, -2)
-    # rear glass
     glVertex3f(-12, 8, -8)
     glVertex3f(12, 8, -8)
     glVertex3f(8, 14, -22)
@@ -153,23 +170,25 @@ def draw_player_car():
     glEnable(GL_LIGHTING)
     glPopMatrix()
 
-    # wheels
-    glColor3f(0.05, 0.05, 0.05)
+    # wheels: rear visible, front mostly hidden
     wheel_offsets = [
-        (22, -7, 22),
-        (-22, -7, 22),
-        (22, -7, -20),
-        (-22, -7, -20),
+        (11, -4, -13),   # rear right
+        (-11, -4, -13),  # rear left
+        (11, -2, 8),     # front right
+        (-11, -2, 8),    # front left
     ]
+
+    glColor3f(0.2, 0.2, 0.2)
     for wx, wy, wz in wheel_offsets:
         glPushMatrix()
         glTranslatef(wx, wy, wz)
+        glScalef(0.8, 0.8, 0.8)
         glutSolidTorus(2.5, 7.5, 24, 24)
         glPopMatrix()
 
-    # rims
+    # rear rims only
     glColor3f(0.8, 0.8, 0.8)
-    for wx, wy, wz in wheel_offsets:
+    for wx, wy, wz in wheel_offsets[:2]:
         glPushMatrix()
         glTranslatef(wx, wy, wz)
         glRotatef(90, 0, 1, 0)
@@ -182,14 +201,12 @@ def draw_player_car():
 def draw_enemy_car():
     glPushMatrix()
 
-    # main body
     glPushMatrix()
     glColor3f(0.9, 0.15, 0.15)
     glScalef(2.0, 0.35, 3.8)
     glutSolidCube(20)
     glPopMatrix()
 
-    # front hood
     glPushMatrix()
     glColor3f(0.85, 0.1, 0.1)
     glTranslatef(0, 6, 18)
@@ -197,7 +214,6 @@ def draw_enemy_car():
     glutSolidCube(20)
     glPopMatrix()
 
-    # cabin
     glPushMatrix()
     glColor3f(0.7, 0.05, 0.08)
     glTranslatef(0, 9, -4)
@@ -205,17 +221,14 @@ def draw_enemy_car():
     glutSolidCube(20)
     glPopMatrix()
 
-    # glass
     glPushMatrix()
     glDisable(GL_LIGHTING)
     glColor4f(0.07, 0.07, 0.1, 0.85)
     glBegin(GL_QUADS)
-    # front windshield
     glVertex3f(-15, 8, 8)
     glVertex3f(15, 8, 8)
     glVertex3f(9, 15, -3)
     glVertex3f(-9, 15, -3)
-    # rear
     glVertex3f(-11, 8, -7)
     glVertex3f(11, 8, -7)
     glVertex3f(7, 13, -18)
@@ -224,7 +237,6 @@ def draw_enemy_car():
     glEnable(GL_LIGHTING)
     glPopMatrix()
 
-    # headlights
     glPushMatrix()
     glDisable(GL_LIGHTING)
     glColor3f(1.0, 0.95, 0.7)
@@ -238,7 +250,6 @@ def draw_enemy_car():
     glEnable(GL_LIGHTING)
     glPopMatrix()
 
-    # side intake
     glPushMatrix()
     glDisable(GL_LIGHTING)
     glColor3f(0.05, 0.05, 0.05)
@@ -252,7 +263,6 @@ def draw_enemy_car():
     glEnable(GL_LIGHTING)
     glPopMatrix()
 
-    # wheels
     glColor3f(0.05, 0.05, 0.05)
     wheel_offsets = [
         (21, -7, 20),
@@ -266,7 +276,6 @@ def draw_enemy_car():
         glutSolidTorus(2.3, 7.2, 24, 24)
         glPopMatrix()
 
-    # rims
     glColor3f(0.78, 0.78, 0.78)
     for wx, wy, wz in wheel_offsets:
         glPushMatrix()
@@ -278,10 +287,12 @@ def draw_enemy_car():
     glPopMatrix()
 
 
-def draw_cone():
-    glColor3f(1.0, 0.5, 0.0)
-    q = gluNewQuadric()
-    gluCylinder(q, 8, 0, 25, 16, 4)
+def draw_collectible_cube():
+    glColor3f(0.2, 1.0, 0.2)  # bright green
+    glPushMatrix()
+    glScalef(0.7, 0.7, 0.7)
+    glutSolidCube(20)
+    glPopMatrix()
 
 
 def draw_barrier():
@@ -298,16 +309,14 @@ def draw_barrier():
 def draw_road_segment(z_start):
     road_width = LANE_OFFSET * (NUM_LANES + 1)
 
-    # asphalt
     glColor3f(0.05, 0.05, 0.05)
     glBegin(GL_QUADS)
     glVertex3f(-road_width / 2, 0, z_start)
-    glVertex3f( road_width / 2, 0, z_start)
-    glVertex3f( road_width / 2, 0, z_start - SEGMENT_LENGTH)
+    glVertex3f(road_width / 2, 0, z_start)
+    glVertex3f(road_width / 2, 0, z_start - SEGMENT_LENGTH)
     glVertex3f(-road_width / 2, 0, z_start - SEGMENT_LENGTH)
     glEnd()
 
-    # lane markings (move because z_start is in world space)
     glColor3f(1.0, 1.0, 1.0)
     for x in (-LANE_OFFSET / 2, LANE_OFFSET / 2):
         z = z_start
@@ -327,20 +336,51 @@ def draw_road_segment(z_start):
                 z -= LANE_MARKING_GAP
             draw = not draw
 
+    rail_x_offset = road_width / 2 + 12
+    z_mid = z_start - SEGMENT_LENGTH / 2
+
+    glColor3f(0.75, 0.75, 0.75)
+    for side in (-1, 1):
+        glPushMatrix()
+        glTranslatef(side * rail_x_offset, 18, z_mid)
+        glScalef(0.25, 1.2, (SEGMENT_LENGTH + 10) / 20.0)
+        glutSolidCube(20)
+        glPopMatrix()
+
+        post_gap = 80
+        pz = z_start
+        end_z = z_start - SEGMENT_LENGTH
+        while pz > end_z:
+            glPushMatrix()
+            glTranslatef(side * rail_x_offset, 10, pz)
+            glScalef(0.22, 1.0, 0.22)
+            glutSolidCube(20)
+            glPopMatrix()
+            pz -= post_gap
+
 
 def draw_environment():
     glClearColor(0.5, 0.8, 1.0, 1.0)
 
-    # grass
+    glDepthMask(GL_FALSE)
+    glDisable(GL_LIGHTING)
+
     glColor3f(0.1, 0.5, 0.1)
+    gy = -6.0
+    grass_half = 2500
+    z_far = player_z + grass_half
+    z_near = player_z - grass_half
+
     glBegin(GL_QUADS)
-    glVertex3f(-2000, -0.1, 2000)
-    glVertex3f(2000, -0.1, 2000)
-    glVertex3f(2000, -0.1, -2000)
-    glVertex3f(-2000, -0.1, -2000)
+    glVertex3f(-2000, gy, z_far)
+    glVertex3f(2000, gy, z_far)
+    glVertex3f(2000, gy, z_near)
+    glVertex3f(-2000, gy, z_near)
     glEnd()
 
-    # road segments in front of player, in world space
+    glEnable(GL_LIGHTING)
+    glDepthMask(GL_TRUE)
+
     first_seg_index = int(player_z // SEGMENT_LENGTH)
     first_z = first_seg_index * SEGMENT_LENGTH
     last_z = player_z + SEGMENT_LENGTH * (NUM_SEGMENTS - 1)
@@ -357,8 +397,12 @@ def draw_environment():
 def spawn_obstacle():
     global spawn_interval
     lane = random.randint(0, NUM_LANES - 1)
-    kind = random.choice(["car", "cone", "barrier"])
-    z = player_z + 1200
+
+    # higher chance for cubes so they appear often
+    kind = random.choice(["cube", "cube", "car", "barrier"])
+
+    # spawn closer so you see them sooner
+    z = player_z + 800
     obstacles.append({"lane": lane, "z": z, "kind": kind})
 
     elapsed = time.time() - start_time
@@ -366,11 +410,47 @@ def spawn_obstacle():
 
 
 def update_obstacles(dt):
-    global obstacles, spawn_timer
+    global obstacles, spawn_timer, score, game_over
+
+    if game_over:
+        return
+
+    # move obstacles
     for o in obstacles:
         o["z"] -= player_speed * 60 * dt
 
-    obstacles = [o for o in obstacles if o["z"] > player_z - 300]
+    # player AABB
+    px = lane_x(player_lane)
+    pz = player_z
+    pw = 25  # half-width
+    ph = 40  # half-length
+
+    new_obs = []
+    for o in obstacles:
+        if o["z"] <= player_z - 150:
+            continue
+
+        ox = lane_x(o["lane"])
+        oz = o["z"]
+
+        if o["kind"] == "cube":
+            # smaller cube box to avoid auto-collect far away
+            if has_collided(px, pz, 15, 30, ox, oz, 8, 8):
+                score += 10
+                continue
+        else:
+            # car or barrier → deadly
+            if has_collided(px, pz, pw, ph, ox, oz, 25, 40):
+                game_over = True
+                new_obs.append(o)
+                break
+
+        new_obs.append(o)
+
+    obstacles = new_obs
+
+    if game_over:
+        return
 
     spawn_timer += dt
     if spawn_timer >= spawn_interval:
@@ -385,8 +465,8 @@ def draw_obstacles():
         glTranslatef(x, 10, o["z"])
         if o["kind"] == "car":
             draw_enemy_car()
-        elif o["kind"] == "cone":
-            draw_cone()
+        elif o["kind"] == "cube":
+            draw_collectible_cube()
         else:
             draw_barrier()
         glPopMatrix()
@@ -464,9 +544,10 @@ def idle():
     dt = now - _last_time
     _last_time = now
 
-    player_z += player_speed * 60 * dt
-    update_obstacles(dt)
+    if not game_over:
+        player_z += player_speed * 60 * dt
 
+    update_obstacles(dt)
     glutPostRedisplay()
 
 
@@ -479,17 +560,26 @@ def showScreen():
     draw_environment()
     draw_obstacles()
 
-    # player car
     glPushMatrix()
     glTranslatef(lane_x(player_lane), 20, player_z)
     draw_player_car()
     glPopMatrix()
 
-    # HUD
-    draw_text(10, WINDOW_H - 30,
-              f"Speed: {player_speed:.1f}  Lane: {player_lane}  Cam: {'3rd' if camera_mode_third else '1st'}")
-    draw_text(10, WINDOW_H - 60,
-              "A/D or ←/→: lane | W: boost | S: normal | Right click: toggle view")
+    glDisable(GL_LIGHTING)
+    draw_text(
+        10, WINDOW_H - 80,
+        f"Speed: {player_speed:.1f}  Lane: {player_lane}  Score: {score}  Cam: {'3rd' if camera_mode_third else '1st'}"
+    )
+    draw_text(
+        10, WINDOW_H - 110,
+        "A/D or <-/->: lane | W: boost | S: normal | Right click: toggle view"
+    )
+
+    if game_over:
+        draw_text(WINDOW_W // 2 - 80, WINDOW_H // 2 + 10, "GAME OVER")
+        draw_text(WINDOW_W // 2 - 120, WINDOW_H // 2 - 20, "Press ESC to quit")
+
+    glEnable(GL_LIGHTING)
 
     glutSwapBuffers()
 
@@ -504,7 +594,6 @@ def main():
     glutInitWindowPosition(100, 50)
     glutCreateWindow(b"3D Endless Lamborghini Highway")
 
-    # lighting
     glEnable(GL_LIGHTING)
     glEnable(GL_LIGHT0)
 
