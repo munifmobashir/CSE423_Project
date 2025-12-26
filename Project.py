@@ -307,7 +307,7 @@ def draw_road_segment(z_start):
     glVertex3f(-road_width / 2, 0, z_start - SEGMENT_LENGTH)
     glEnd()
 
-    # lane markings (move because z_start is in world space)
+    # lane markings
     glColor3f(1.0, 1.0, 1.0)
     for x in (-LANE_OFFSET / 2, LANE_OFFSET / 2):
         z = z_start
@@ -327,20 +327,55 @@ def draw_road_segment(z_start):
                 z -= LANE_MARKING_GAP
             draw = not draw
 
+    # fences/guardrails (closer + segment-aligned)
+    rail_x_offset = road_width / 2 + 12
+    z_mid = z_start - SEGMENT_LENGTH / 2
+
+    glColor3f(0.75, 0.75, 0.75)
+    for side in (-1, 1):
+        glPushMatrix()
+        glTranslatef(side * rail_x_offset, 18, z_mid)
+        glScalef(0.25, 1.2, (SEGMENT_LENGTH + 10) / 20.0)
+        glutSolidCube(20)
+        glPopMatrix()
+
+        post_gap = 80
+        pz = z_start
+        end_z = z_start - SEGMENT_LENGTH
+        while pz > end_z:
+            glPushMatrix()
+            glTranslatef(side * rail_x_offset, 10, pz)
+            glScalef(0.22, 1.0, 0.22)
+            glutSolidCube(20)
+            glPopMatrix()
+            pz -= post_gap
+
 
 def draw_environment():
     glClearColor(0.5, 0.8, 1.0, 1.0)
 
-    # grass
+    # ---- GRASS (endless + no flicker) ----
+    glDepthMask(GL_FALSE)
+    glDisable(GL_LIGHTING)
+
     glColor3f(0.1, 0.5, 0.1)
+    gy = -6.0
+    grass_half = 2500
+    z_far = player_z + grass_half
+    z_near = player_z - grass_half
+
     glBegin(GL_QUADS)
-    glVertex3f(-2000, -0.1, 2000)
-    glVertex3f(2000, -0.1, 2000)
-    glVertex3f(2000, -0.1, -2000)
-    glVertex3f(-2000, -0.1, -2000)
+    glVertex3f(-2000, gy, z_far)
+    glVertex3f( 2000, gy, z_far)
+    glVertex3f( 2000, gy, z_near)
+    glVertex3f(-2000, gy, z_near)
     glEnd()
 
-    # road segments in front of player, in world space
+    glEnable(GL_LIGHTING)
+    glDepthMask(GL_TRUE)
+    # -------------------------------------
+
+    # road segments in front of player
     first_seg_index = int(player_z // SEGMENT_LENGTH)
     first_z = first_seg_index * SEGMENT_LENGTH
     last_z = player_z + SEGMENT_LENGTH * (NUM_SEGMENTS - 1)
@@ -441,12 +476,13 @@ def keyboardListener(key, x, y):
 
 def specialKeyListener(key, x, y):
     global player_lane
+    # swapped arrows (as per your system behavior)
     if key == GLUT_KEY_LEFT:
-        if player_lane > 0:
-            player_lane -= 1
-    elif key == GLUT_KEY_RIGHT:
         if player_lane < NUM_LANES - 1:
             player_lane += 1
+    elif key == GLUT_KEY_RIGHT:
+        if player_lane > 0:
+            player_lane -= 1
 
 
 def mouseListener(button, state, x, y):
@@ -489,7 +525,7 @@ def showScreen():
     draw_text(10, WINDOW_H - 30,
               f"Speed: {player_speed:.1f}  Lane: {player_lane}  Cam: {'3rd' if camera_mode_third else '1st'}")
     draw_text(10, WINDOW_H - 60,
-              "A/D or ←/→: lane | W: boost | S: normal | Right click: toggle view")
+              "A/D or <-/->: lane | W: boost | S: normal | Right click: toggle view")
 
     glutSwapBuffers()
 
